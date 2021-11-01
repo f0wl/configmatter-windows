@@ -115,7 +115,7 @@ func base64Decode(message []byte) (b []byte) {
 }
 
 // blackMatterConfigDecrypt re-implements the algorithm to decrypt the config + credentials and ransomnote within
-func blackMatterConfigDecrypt(ciphertext []byte, startValue uint32) []byte {
+func configDecryptV1(ciphertext []byte, startValue uint32) []byte {
 	var plaintext []byte
 	var step, dword uint32
 	seed := uint64(startValue)
@@ -132,19 +132,54 @@ func blackMatterConfigDecrypt(ciphertext []byte, startValue uint32) []byte {
 	return plaintext
 }
 
+func genKeystreamV3(startValue uint64, keyLen int) []byte {
+	var keyData []byte
+
+	step := startValue
+	for i := 0; i < keyLen; {
+		step = (0x5851F42D4C957F2D*step + 0x14057B7EF767814F) & 0xFFFFFFFFFFFFFFFF
+		mult := (step * startValue) & 0xFFFFFFFFFFFFFFFF
+
+		qword_tmp := make([]byte, 8)
+		binary.LittleEndian.PutUint64(qword_tmp, mult)
+		keyData = append(keyData, qword_tmp...)
+		i += 8
+	}
+	return keyData
+}
+
+func configDecryptV3(ciphertext []byte, xorKeystream []byte, configLen int) []byte {
+	plaintext := make([]byte, configLen)
+
+	for i := 0; i < configLen-14; {
+		plaintext[i] = ciphertext[i] ^ xorKeystream[i]
+		plaintext[i+1] = ciphertext[i+1] ^ xorKeystream[i+5]
+		plaintext[i+2] = ciphertext[i+2] ^ xorKeystream[i+1]
+		plaintext[i+3] = ciphertext[i+3] ^ xorKeystream[i+4]
+		plaintext[i+4] = ciphertext[i+4] ^ xorKeystream[i+2]
+		plaintext[i+5] = ciphertext[i+5] ^ xorKeystream[i+7]
+		plaintext[i+6] = ciphertext[i+6] ^ xorKeystream[i+3]
+		plaintext[i+7] = ciphertext[i+7] ^ xorKeystream[i+6]
+		i += 8
+	}
+
+	return plaintext
+}
+
 // Flag variables for commandline arguments
 var verboseFlag bool
 var jsonFlag bool
+var versionFlag int
 
 type b64Str struct {
-	Unknown1     []byte   `json:"unknown1"`     // likely files and directories to skip, see below
-	Unknown2     []byte   `json:"unknown2"`     // ^
-	Unknown3     []byte   `json:"unknown3"`     // ^
-	Processes    []string `json:"processes"`    // Substrings of processes to be killed
-	Services     []string `json:"services"`     // Services to be killed
-	ExfilServers []string `json:"exfilServers"` // Domains of the Data Exfiltration servers
-	Credentials  []string `json:"credentials"`  // Compromised credentials of the targeted organization
-	Ransomnote   string   `json:"Ransomnote"`   // Ransomnote that is dropped after encryption
+	FolderHashes    []byte   `json:"folderHashes"`    // exclusion list of 4 byte hashes of folder names
+	FileHashes      []byte   `json:"fileHashes"`      // exclusion list of 4 byte hashes of file names
+	ExtensionHashes []byte   `json:"extensionHashes"` // exclusion list of 4 byte hashes of file extensions
+	Processes       []string `json:"processes"`       // Substrings of processes to be killed
+	Services        []string `json:"services"`        // Services to be killed
+	ExfilServers    []string `json:"exfilServers"`    // Domains of the Data Exfiltration servers
+	Credentials     []string `json:"credentials"`     // Compromised credentials of the targeted organization
+	Ransomnote      string   `json:"Ransomnote"`      // Ransomnote that is dropped after encryption
 }
 
 type boolCfg struct {
@@ -155,6 +190,7 @@ type boolCfg struct {
 	KillProcesses    bool `json:"killProcesses"`        // Kill processes matching the substring list
 	StopServices     bool `json:"stopServices"`         // Stop services that are contained in the list
 	CreateMutex      bool `json:"createMutex"`          // Create a Mutex to prevent multiple executions
+	PrintRansomnote  bool `json:"printRansomnote"`      // Print out the ransomnote on the users default local printer
 	ExfilInfo        bool `json:"exfilAttackInfo"`      // Report back information about the system to the attacker servers
 }
 
@@ -183,6 +219,7 @@ func main() {
 	// parse passed flags
 	flag.BoolVar(&jsonFlag, "j", false, "Write extracted config to a JSON file")
 	flag.BoolVar(&verboseFlag, "v", false, "Verbose output")
+	flag.IntVar(&versionFlag, "version", 3, "Specify the version of the BlackMatter ransomware sample: 1 for v1.x, 2 for v2.x, 3 for v3.x")
 	flag.Parse()
 
 	if flag.NArg() == 0 {
@@ -219,14 +256,48 @@ func main() {
 		color.Green("\n✓ Successfully dumped the .rsrc section")
 	}
 
-	// at the start of the config we can find two dwords containing the seed
-	//value for the decryption algorithm and the length of the config
-	algStart := binary.LittleEndian.Uint32(sectionData[:4])
-	configSize := int(binary.LittleEndian.Uint32(sectionData[4:8])) + 8
-	encryptedConfig := sectionData[8:configSize]
+	var plainComp []byte
+	var algStart_v1 uint32
+	var algStart_v2 uint64
+	var configLength int
+	var xorKeystream []byte
 
-	// decrypt the config
-	plainComp := blackMatterConfigDecrypt(encryptedConfig, algStart)
+	if versionFlag == 1 {
+
+		// at the start of the config we can find two dwords containing the seed
+		//value for the decryption algorithm and the length of the config
+		algStart_v1 = binary.LittleEndian.Uint32(sectionData[:4])
+		configLength = int(binary.LittleEndian.Uint32(sectionData[4:8])) + 8
+		encryptedConfig := sectionData[8:configLength]
+
+		// decrypt the config
+		plainComp = configDecryptV1(encryptedConfig, algStart_v1)
+
+	} else if versionFlag == 2 || versionFlag == 3 {
+
+		// at the start of the V2/V3 config we can find two dwords containing
+		//the seed value for the decryption algorithm and the length of the config
+		algStart_v2 = binary.LittleEndian.Uint64(sectionData[:8])
+		configLength = int(binary.LittleEndian.Uint32(sectionData[8:12])) + 14
+		encryptedConfig := sectionData[12:configLength]
+
+		xorKeystream = genKeystreamV3(algStart_v2, configLength)
+
+		if verboseFlag {
+			fmt.Printf("\n→ PCG Seed: 0x%x\n", algStart_v2)
+			fmt.Printf("→ Config length: 0x%x\n\n", configLength)
+			fmt.Printf("→ Compressed length: 0x%x\n\n", len(encryptedConfig))
+			fmt.Printf("→ First 32 bytes of the XOR Keystream: \n%v\n", hex.Dump(xorKeystream[:32]))
+		}
+
+		// decrypt the config
+		plainComp = configDecryptV3(encryptedConfig, xorKeystream, configLength)
+
+		if verboseFlag {
+			fmt.Printf("→ First 32 bytes of the decrypted config: \n%v\n", hex.Dump(plainComp[:32]))
+		}
+
+	}
 
 	// the now decrypted config is compressed with aPlib, so we have to decompress it
 	// the aPlib package is provided by Hatching.io, thanks :D
@@ -266,26 +337,41 @@ func main() {
 	counter += 1
 	cfg.BooleanConfig.CreateMutex = byteToBool(plainDecomp[counter : counter+1])
 	counter += 1
-	cfg.BooleanConfig.ExfilInfo = byteToBool(plainDecomp[counter : counter+1])
-	counter += 1
-	cfg.Unknown0 = plainDecomp[counter : counter+36]
-	counter += 36
+	if versionFlag == 1 {
+
+		cfg.BooleanConfig.ExfilInfo = byteToBool(plainDecomp[counter : counter+1])
+		counter += 1
+		cfg.Unknown0 = plainDecomp[counter : counter+36]
+		counter += 36
+
+	} else if versionFlag == 2 || versionFlag == 3 {
+
+		cfg.BooleanConfig.PrintRansomnote = byteToBool(plainDecomp[counter : counter+1])
+		counter += 1
+		cfg.BooleanConfig.ExfilInfo = byteToBool(plainDecomp[counter : counter+1])
+		counter += 1
+		cfg.Unknown0 = plainDecomp[counter : counter+44]
+		counter += 44
+
+	}
 
 	// base64 strings in the config are separated by a nullbyte
 	base64Spilt := strings.Split(string(plainDecomp[counter:]), "\x00")
 
 	// loop through the base64 encoded strings and decode them
 	for s := range base64Spilt {
+
 		base64Spilt[s] = string(base64Decode([]byte(base64Spilt[s])))
+
 	}
 
 	length := len(base64Spilt)
 
 	// the three unknown strings likely contain hashes of files and directories to be skipped
 	// I still need to confirm this myself
-	cfg.Base64Contents.Unknown1 = []byte(base64Spilt[0])
-	cfg.Base64Contents.Unknown2 = []byte(base64Spilt[1])
-	cfg.Base64Contents.Unknown3 = []byte(base64Spilt[2])
+	cfg.Base64Contents.FolderHashes = []byte(base64Spilt[0])
+	cfg.Base64Contents.FileHashes = []byte(base64Spilt[1])
+	cfg.Base64Contents.ExtensionHashes = []byte(base64Spilt[2])
 
 	// extracting the lists of process substrings and services
 	// the strings are split on three nullbytes into the string array in the structure
@@ -296,11 +382,28 @@ func main() {
 	if cfg.BooleanConfig.ExfilInfo {
 		cfg.Base64Contents.ExfilServers = removeEmptyStrings(strings.Split(base64Spilt[length-4], "\x00\x00\x00"))
 		// the compromised credentials are encrypted with the same algorithm as the config itself
-		cfg.Base64Contents.Credentials = removeEmptyStrings(strings.Split(string(blackMatterConfigDecrypt([]byte(base64Spilt[length-3]), algStart)), "\x00\x00\x00"))
+
+		if versionFlag == 1 {
+
+			cfg.Base64Contents.Credentials = removeEmptyStrings(strings.Split(string(configDecryptV1([]byte(base64Spilt[length-3]), algStart_v1)), "\x00\x00\x00"))
+
+		} else if versionFlag == 2 || versionFlag == 3 {
+
+			cfg.Base64Contents.Credentials = removeEmptyStrings(strings.Split(string(configDecryptV3([]byte(base64Spilt[length-3]), xorKeystream, len(base64Spilt[length-3]))), "\x00\x00\x00"))
+
+		}
 	}
 
-	// decrypting the ransomnote, same algorithm again
-	cfg.Base64Contents.Ransomnote = string(blackMatterConfigDecrypt([]byte(base64Spilt[length-2]), algStart))
+	if versionFlag == 1 {
+
+		// decrypting the ransomnote, same algorithm again
+		cfg.Base64Contents.Ransomnote = string(configDecryptV1([]byte(base64Spilt[length-2]), algStart_v1))
+
+	} else if versionFlag == 2 || versionFlag == 3 {
+
+		cfg.Base64Contents.Ransomnote = string(configDecryptV3([]byte(base64Spilt[length-2]), xorKeystream, len(base64Spilt[length-2])))
+
+	}
 
 	// printing the extracted information to stdout
 	color.Green("\n✓ Extracted configuration:\n\n")
@@ -345,5 +448,6 @@ func main() {
 		check(err)
 		color.Green("\n✓ Wrote %d bytes to %v\n\n", n3, filename)
 		jsonOutput.Sync()
+
 	}
 }
