@@ -132,12 +132,14 @@ func configDecryptV1(ciphertext []byte, startValue uint32) []byte {
 	return plaintext
 }
 
+// genKeystreamV3 implements the PCG PRNG used to create the XOR Keystream
 func genKeystreamV3(startValue uint64, keyLen int) []byte {
 	var keyData []byte
 
 	step := startValue
 	for i := 0; i < keyLen; {
 		step = (0x5851F42D4C957F2D*step + 0x14057B7EF767814F) & 0xFFFFFFFFFFFFFFFF
+		// additional multiplication
 		mult := (step * startValue) & 0xFFFFFFFFFFFFFFFF
 
 		qword_tmp := make([]byte, 8)
@@ -148,6 +150,7 @@ func genKeystreamV3(startValue uint64, keyLen int) []byte {
 	return keyData
 }
 
+// configDecryptV3 implements the XOR decryption algorithm used in BlackMatter Ransomware V2.x and V3.x
 func configDecryptV3(ciphertext []byte, xorKeystream []byte, configLen int) []byte {
 	plaintext := make([]byte, configLen)
 
@@ -281,9 +284,11 @@ func main() {
 		configLength = int(binary.LittleEndian.Uint32(sectionData[8:12])) + 14
 		encryptedConfig := sectionData[12:configLength]
 
+		// generate the keystream for the XOR operations
 		xorKeystream = genKeystreamV3(algStart_v2, configLength)
 
 		if verboseFlag {
+			// Debugging printout for decryption data
 			fmt.Printf("\n→ PCG Seed: 0x%x\n", algStart_v2)
 			fmt.Printf("→ Config length: 0x%x\n\n", configLength)
 			fmt.Printf("→ Compressed length: 0x%x\n\n", len(encryptedConfig))
@@ -346,6 +351,7 @@ func main() {
 
 	} else if versionFlag == 2 || versionFlag == 3 {
 
+		// the config option to physically print the ransomnote was introduced in BM version 2.0
 		cfg.BooleanConfig.PrintRansomnote = byteToBool(plainDecomp[counter : counter+1])
 		counter += 1
 		cfg.BooleanConfig.ExfilInfo = byteToBool(plainDecomp[counter : counter+1])
@@ -381,8 +387,8 @@ func main() {
 	// if information edxfiltration is disabled there is no Server or Credentials string in the config
 	if cfg.BooleanConfig.ExfilInfo {
 		cfg.Base64Contents.ExfilServers = removeEmptyStrings(strings.Split(base64Spilt[length-4], "\x00\x00\x00"))
-		// the compromised credentials are encrypted with the same algorithm as the config itself
 
+		// the compromised credentials are encrypted with the same algorithm as the config itself
 		if versionFlag == 1 {
 
 			cfg.Base64Contents.Credentials = removeEmptyStrings(strings.Split(string(configDecryptV1([]byte(base64Spilt[length-3]), algStart_v1)), "\x00\x00\x00"))
@@ -438,6 +444,7 @@ func main() {
 		// strip the unicode garbage
 		jsonString = strings.ReplaceAll(jsonString, `\u0000`, "")
 
+		// concat the filename for the json file output
 		filename := "config-" + md5sum + ".json"
 
 		// write the JSON string to a file
