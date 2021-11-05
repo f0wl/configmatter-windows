@@ -27,13 +27,13 @@ The first dword (green) contains the seed value for LCG pseudorandom number gene
 
 ![Encrypted and compressed configuration](img/hex-enccomp.png)
 
-To extract the configuration we first need to decrypt it (Link to the [Implementation](https://github.com/f0wl/configmatter-windows/blob/4f1ada60bd47909dead8d424dc71cad776e56cf8/configmatter-windows.go#L117)). After that we can decompress the aPlib-compressed data. The result can be seen below: The first 80 bytes contain the RSA-1024 Public Key (red). After that we can find the victim ID (blue) and the AES Key (orange) used for encrypted information exfiltration. The following 8 bytes (green) define whether core capabilities of the ransomware are enabled or disbled. The yellow highlighed Bytes could not be identified yet. Lastly the configuration contains base64 encoded strings (pink) like for example process and service lists, exfiltration domains or the encrypted victim credentials and ransomnote.
+To extract the configuration we first need to decrypt it (Link to the [Implementation](https://github.com/f0wl/configmatter-windows/blob/5f0922ee08a06937d43eb07d052c37ae298c2561/configmatter-windows.go#L118)). After that we can decompress the aPlib-compressed data. The result can be seen below: The first 80 bytes contain the RSA-1024 Public Key (red). After that we can find the victim ID (blue) and the AES Key (orange) used for encrypted information exfiltration. The following 8 bytes (green) define whether core capabilities of the ransomware are enabled or disbled. The dwords highlighted in yellow represent offsets for the configuration contents to aid parsing since some are optional. Lastly the configuration contains base64 encoded strings (pink) like for example process and service lists, exfiltration domains or the encrypted victim credentials and ransomnote.
 
 ![Encrypted and compressed configuration](img/hex-dec.png)
 
 ### Version 2.x / 3.x
 
-The first qword (green) contains the seed value for the PCG pseudorandom number generator (the major change in the configuration encryption since V1.x). The second dword (yellow) indicates the size of the following encrypted + aPLib compressed configuration (red).
+The first qword (green) contains the seed value for the PCG pseudorandom number generator (the major change in the configuration encryption since V1.x, Link to the [Implementation](https://github.com/f0wl/configmatter-windows/blob/5f0922ee08a06937d43eb07d052c37ae298c2561/configmatter-windows.go#L136)). The second dword (yellow) indicates the size of the following encrypted + aPLib compressed configuration (red).
 
 ![Encrypted and compressed configuration](img/hex-v2-enccomp.png)
 
