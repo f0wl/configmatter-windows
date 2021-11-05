@@ -203,7 +203,7 @@ type blackmatterConfig struct {
 	VictimID       []byte  `json:"victimID"`       // bot_company
 	AESKey         []byte  `json:"aesKey"`         // AES-ECB-128 Key for Exfil communication
 	BooleanConfig  boolCfg `json:"booleanConfig"`  // 8 Byte Boolean config
-	Unknown0       []byte  `json:"unknown0"`       // 9 unidentified dwords
+	ConfigOffsets  []byte  `json:"configOffsets"`  // Offsets of the following config contents
 	Base64Contents b64Str  `json:"base64Contents"` // base64 encoded strings
 }
 
@@ -346,7 +346,7 @@ func main() {
 
 		cfg.BooleanConfig.ExfilInfo = byteToBool(plainDecomp[counter : counter+1])
 		counter += 1
-		cfg.Unknown0 = plainDecomp[counter : counter+36]
+		cfg.ConfigOffsets = plainDecomp[counter : counter+36]
 		counter += 36
 
 	} else if versionFlag == 2 || versionFlag == 3 {
@@ -356,7 +356,7 @@ func main() {
 		counter += 1
 		cfg.BooleanConfig.ExfilInfo = byteToBool(plainDecomp[counter : counter+1])
 		counter += 1
-		cfg.Unknown0 = plainDecomp[counter : counter+44]
+		cfg.ConfigOffsets = plainDecomp[counter : counter+44]
 		counter += 44
 
 	}
